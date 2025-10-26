@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import os
+import zipfile
 from pathlib import Path
+
+from urllib.request import urlretrieve
 
 import pandas as pd
 
@@ -8,8 +12,64 @@ pd.set_option("display.width", 120)
 pd.set_option("display.max_columns", None)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-RAW_DATA_DIR = BASE_DIR / "data" / "raw" / "ml-latest-small"
 PROCESSED_DATA_DIR = BASE_DIR / "data" / "processed"
+
+
+def _download_movielens_dataset(dataset_name: str, raw_root: Path) -> Path:
+    """Download and extract a MovieLens bundle into the raw data directory."""
+
+    raw_root.mkdir(parents=True, exist_ok=True)
+    archive_path = raw_root / f"{dataset_name}.zip"
+    url = f"https://files.grouplens.org/datasets/movielens/{dataset_name}.zip"
+
+    print(f"Downloading MovieLens dataset '{dataset_name}' from {url} ...")
+    try:
+        urlretrieve(url, archive_path)
+    except Exception as exc:  # pragma: no cover - network failure handling
+        raise RuntimeError(
+            f"Unable to download MovieLens dataset '{dataset_name}'. "
+            "Check your network connection or choose an existing dataset via MOVIELENS_DATA_DIR."
+        ) from exc
+
+    try:
+        with zipfile.ZipFile(archive_path, "r") as zf:
+            zf.extractall(raw_root)
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+    extracted_dir = raw_root / dataset_name
+    if not extracted_dir.exists():  # pragma: no cover - unexpected archive layout
+        raise FileNotFoundError(
+            f"Downloaded archive for '{dataset_name}' did not contain a '{dataset_name}' directory."
+        )
+
+    print(f"Dataset '{dataset_name}' extracted to {extracted_dir}")
+    return extracted_dir
+
+
+def _resolve_dataset_dir() -> Path:
+    """Discover the MovieLens dataset directory, downloading if necessary."""
+
+    dataset_dir_env = os.getenv("MOVIELENS_DATA_DIR")
+    dataset_name = os.getenv("MOVIELENS_DATASET", "ml-latest-small")
+
+    if dataset_dir_env:
+        path = Path(dataset_dir_env).expanduser().resolve()
+        if not path.exists():
+            raise FileNotFoundError(
+                "MOVIELENS_DATA_DIR is set but does not exist: " f"{path}"
+            )
+        return path
+
+    raw_root = BASE_DIR / "data" / "raw"
+    candidate = raw_root / dataset_name
+    if candidate.exists():
+        return candidate
+
+    return _download_movielens_dataset(dataset_name, raw_root)
+
+
+RAW_DATA_DIR = _resolve_dataset_dir()
 
 
 def load_movielens_data(dataset_dir: Path = RAW_DATA_DIR) -> tuple[pd.DataFrame, pd.DataFrame]:

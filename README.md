@@ -16,11 +16,19 @@ source .venv/bin/activate  # or .venv\Scripts\activate on Windows
 pip install -r requirements.txt
 ```
 
-Download the MovieLens latest-small bundle (Phase 1 script will do this automatically if it is missing):
+Download the MovieLens bundle you want to work with (the prep script now fetches it automatically if it is missing). Examples:
 
 ```bash
-/workspaces/Movie-Recommendation-System/.venv/bin/python src/data_preparation.py
+/workspaces/Movie-Recommendation-System/.venv/bin/python src/data_preparation.py  # defaults to ml-latest-small
+
+# Use the larger ml-latest bundle (newer releases, more ratings)
+MOVIELENS_DATASET=ml-latest /workspaces/Movie-Recommendation-System/.venv/bin/python src/data_preparation.py
+
+# Point to an already downloaded directory
+MOVIELENS_DATA_DIR=/data/movielens/ml-25m /workspaces/Movie-Recommendation-System/.venv/bin/python src/data_preparation.py
 ```
+
+Supported dataset names mirror the official archives (`ml-latest-small`, `ml-latest`, `ml-25m`, etc.). The script will download the zip from [grouplens.org](https://grouplens.org/datasets/movielens/) when the target directory is missing.
 
 This creates `data/processed/ratings_with_movies.csv` and a cached user-item matrix for downstream phases.
 
@@ -49,9 +57,9 @@ Set `OMDB_API_KEY` to a valid key (a free key from [omdbapi.com](https://www.omd
 
 The deployable app lives at `app/dashboard.py` and bundles the full feature set:
 
-- Fuzzy "Did you mean" title suggestions and OMDb-powered search for post-2018 releases.
+- Fuzzy "Did you mean" title suggestions and OMDb-powered search for post-2018 releases (configure `OMDB_API_KEY` for live metadata).
 - Adjustable genre/year/rating filters, top-N slider, and latent-factor (SVD) weight blending.
-- One-click dark/light mode toggle and poster/plot display when an OMDb key is configured.
+- Dark mode is the default (with a light-mode toggle) and poster/plot display when an OMDb key is configured.
 
 Launch locally:
 

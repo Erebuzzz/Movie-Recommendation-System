@@ -185,7 +185,7 @@ def render_recommendations(df: pd.DataFrame, title: str) -> None:
             with cols[0]:
                 poster = row.get("poster")
                 if poster:
-                    st.image(poster, use_container_width=True)
+                    st.image(poster, width="stretch")
             with cols[1]:
                 st.markdown(f"### {row.get('title', 'Unknown')}")
                 st.write(f"Genres: {row.get('genres', 'n/a')}")
@@ -258,7 +258,7 @@ def main() -> None:
     st.sidebar.title("Controls")
 
     if "dark_mode" not in st.session_state:
-        st.session_state.dark_mode = False
+        st.session_state.dark_mode = True
 
     dark_mode = st.sidebar.checkbox("Dark mode", value=st.session_state.dark_mode)
     st.session_state.dark_mode = dark_mode
