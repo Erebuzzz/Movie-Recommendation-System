@@ -5,6 +5,7 @@ A hybrid recommender stack built on the MovieLens 100k dataset with collaborativ
 - Offline preparation scripts and persisted artifacts for ratings + metadata.
 - Collaborative, content-based, and hybrid recommenders with fuzzy title matching and a cold-start fallback.
 - OMDb enrichment (posters, plots, cast) with caching and external search support for newer releases.
+- Live TMDb integration for real-time catalog coverage and similarity recommendations.
 - A console workflow for power users and a deployable Streamlit dashboard with light/dark modes.
 - Optional advanced enhancements: SVD blending, diagnostics, and quick visualization exports.
 
@@ -32,6 +33,18 @@ Supported dataset names mirror the official archives (`ml-latest-small`, `ml-lat
 
 This creates `data/processed/ratings_with_movies.csv` and a cached user-item matrix for downstream phases.
 
+### TMDb live catalogue
+
+For up-to-date theatrical/streaming releases the dashboard can switch to TMDb live data:
+
+```bash
+export TMDB_API_KEY=<your_tmdb_v3_key>
+# optional (for higher rate limits / bearer auth)
+export TMDB_READ_TOKEN=<your_tmdb_v4_read_token>
+```
+
+With those variables set, the Streamlit app downloads trending/popular lists on demand, blends TMDb's native recommendations with content similarity scores, and weights results by popularity and vote counts. The legacy MovieLens hybrid engine remains available for offline experimentation.
+
 ## Running the recommender scripts
 
 ```bash
@@ -57,15 +70,17 @@ Set `OMDB_API_KEY` to a valid key (a free key from [omdbapi.com](https://www.omd
 
 The deployable app lives at `app/dashboard.py` and bundles the full feature set:
 
-- Fuzzy "Did you mean" title suggestions and OMDb-powered search for post-2018 releases (configure `OMDB_API_KEY` for live metadata).
+- Fuzzy "Did you mean" title suggestions, TMDb-backed live search, and OMDb-powered enrichment (set `TMDB_API_KEY` and optionally `OMDB_API_KEY`).
 - Adjustable genre/year/rating filters, top-N slider, and latent-factor (SVD) weight blending.
-- Dark mode is the default (with a light-mode toggle) and poster/plot display when an OMDb key is configured.
+- Dark mode is the default (with a light-mode toggle); posters/plots come from TMDb in live mode or OMDb when using the MovieLens engine.
 
 Launch locally:
 
 ```bash
-OMDB_API_KEY=<your_key> streamlit run app/dashboard.py
+TMDB_API_KEY=<your_tmdb_v3_key> streamlit run app/dashboard.py
 ```
+
+Optionally provide `TMDB_READ_TOKEN` (for bearer-authenticated requests) and `OMDB_API_KEY` if you want additional OMDb enrichment while using the MovieLens hybrid engine.
 
 The dashboard caches models per session. SVD factors are trained lazily when a non-zero weight is chosen. Deploy via Streamlit Community Cloud, Azure App Service, or any platform that can run `streamlit run` with the repo and environment variables configured.
 

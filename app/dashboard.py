@@ -24,8 +24,10 @@ from hybrid import (
     init_hybrid_model,
     suggest_titles,
 )
+from live_recommender import LiveRecommender
 from metadata_enrichment import OmdbClient, enrich_recommendations
 from data_preparation import PROCESSED_DATA_DIR
+from tmdb_client import TMDbClient
 
 SVD_FACTORS_FILE = PROCESSED_DATA_DIR / "svd_item_factors.pkl"
 SVD_META_FILE = PROCESSED_DATA_DIR / "svd_item_factors_meta.json"
@@ -81,6 +83,18 @@ def load_omdb_client() -> OmdbClient:
     return OmdbClient(api_key=os.getenv("OMDB_API_KEY"))
 
 
+@st.cache_resource(show_spinner=True)
+def load_live_recommender(catalog_pages: int = 4) -> LiveRecommender:
+    client = TMDbClient()
+    if not client.is_enabled():
+        raise RuntimeError(
+            "TMDB_API_KEY or TMDB_READ_TOKEN must be configured for live TMDb recommendations."
+        )
+    recommender = LiveRecommender(client, catalog_pages=catalog_pages)
+    recommender.prime_catalog()
+    return recommender
+
+
 def rerun_app() -> None:
     rerun = getattr(st, "rerun", None)
     if callable(rerun):
@@ -130,11 +144,20 @@ def apply_filters(
         filtered = filtered[mask]
 
     if min_year:
-        years = filtered["title"].str.extract(r"(\d{4})").astype(float)
-        filtered = filtered[years[0].fillna(0) >= min_year]
+        if "release_year" in filtered:
+            filtered = filtered[filtered["release_year"].fillna(0) >= min_year]
+        else:
+            years = filtered["title"].str.extract(r"(\d{4})").astype(float)
+            filtered = filtered[years[0].fillna(0) >= min_year]
 
     if min_mean_rating:
-        filtered = filtered[filtered["mean_rating"].fillna(0) >= min_mean_rating]
+        rating_col = None
+        if "mean_rating" in filtered:
+            rating_col = "mean_rating"
+        elif "vote_average" in filtered:
+            rating_col = "vote_average"
+        if rating_col:
+            filtered = filtered[filtered[rating_col].fillna(0) >= min_mean_rating]
 
     return filtered
 
@@ -189,11 +212,21 @@ def render_recommendations(df: pd.DataFrame, title: str) -> None:
             with cols[1]:
                 st.markdown(f"### {row.get('title', 'Unknown')}")
                 st.write(f"Genres: {row.get('genres', 'n/a')}")
-                st.write(
-                    f"Final score: {row.get('final_score', 0):.3f} "
-                    f"(collab={row.get('collab_score', 0):.3f}, content={row.get('content_score', 0):.3f}, "
-                    f"genre={row.get('genre_similarity', 0):.3f}, svd={row.get('svd_score', 0):.3f})"
-                )
+                contributions = []
+                for label, key in [
+                    ("collab", "collab_score"),
+                    ("content", "content_score"),
+                    ("genre", "genre_similarity"),
+                    ("svd", "svd_score"),
+                    ("tmdb", "tmdb_score"),
+                    ("popularity", "popularity_score"),
+                ]:
+                    value = row.get(key)
+                    if value is None or (isinstance(value, float) and np.isnan(value)):
+                        continue
+                    contributions.append(f"{label}={float(value):.3f}")
+                score_detail = ", ".join(contributions) if contributions else "–"
+                st.write(f"Final score: {row.get('final_score', 0):.3f} ({score_detail})")
                 st.write(
                     f"Ratings count: {row.get('rating_count', 'n/a')} | "
                     f"Avg rating: {row.get('mean_rating', 'n/a')} | IMDb: {row.get('imdb_rating', 'n/a')}"
@@ -264,23 +297,43 @@ def main() -> None:
     st.session_state.dark_mode = dark_mode
     apply_theme(dark_mode)
 
+    data_sources = ("TMDb live", "MovieLens hybrid")
+    default_source = st.session_state.get("data_source", data_sources[0])
+    data_source = st.sidebar.radio(
+        "Recommendation source",
+        data_sources,
+        index=data_sources.index(default_source) if default_source in data_sources else 0,
+    )
+    st.session_state.data_source = data_source
+
     top_n = st.sidebar.slider("Number of recommendations", 3, 15, 6)
     genre_filter = st.sidebar.text_input("Genre keyword filter")
-    min_year = st.sidebar.number_input("Minimum release year", min_value=1900, max_value=2030, value=1900, step=1)
+    min_year = st.sidebar.number_input("Minimum release year", min_value=1900, max_value=2035, value=2000, step=1)
     min_year = int(min_year) if min_year else None
-    min_avg_rating = st.sidebar.slider("Minimum avg rating", 0.0, 5.0, 0.0, step=0.1)
+
+    rating_max = 10.0 if data_source == "TMDb live" else 5.0
+    min_avg_rating = st.sidebar.slider("Minimum rating", 0.0, rating_max, 0.0, step=0.1)
     min_avg_rating = min_avg_rating or None
 
-    st.sidebar.markdown("---")
-    svd_weight = st.sidebar.slider("SVD blend weight", 0.0, 1.0, 0.2, step=0.05)
-    svd_factors = st.sidebar.selectbox("Latent factors", [20, 40, 60, 80], index=1)
-    svd_min_support = st.sidebar.slider("SVD min ratings", 5, 50, 15, step=5)
+    svd_weight = 0.0
+    svd_factors = 40
+    svd_min_support = 15
+    enrich_enabled = False
 
-    st.sidebar.markdown("---")
-    enrich_enabled = st.sidebar.checkbox("Include OMDb posters & plots", value=True)
+    if data_source == "MovieLens hybrid":
+        st.sidebar.markdown("---")
+        svd_weight = st.sidebar.slider("SVD blend weight", 0.0, 1.0, 0.2, step=0.05)
+        svd_factors = st.sidebar.selectbox("Latent factors", [20, 40, 60, 80], index=1)
+        svd_min_support = st.sidebar.slider("SVD min ratings", 5, 50, 15, step=5)
 
-    st.sidebar.markdown("---")
-    st.sidebar.caption("Enter an OMDb API key via OMDB_API_KEY env var for live metadata.")
+        st.sidebar.markdown("---")
+        enrich_enabled = st.sidebar.checkbox("Include OMDb posters & plots", value=True)
+
+        st.sidebar.markdown("---")
+        st.sidebar.caption("Enter an OMDb API key via OMDB_API_KEY env var for live metadata.")
+    else:
+        st.sidebar.markdown("---")
+        st.sidebar.caption("Powered by TMDb live catalog. Set TMDB_API_KEY (and optionally TMDB_READ_TOKEN).")
 
     movie_query = st.text_input("Movie you like", value=st.session_state.get("movie_query", ""))
     st.session_state.movie_query = movie_query
@@ -289,6 +342,40 @@ def main() -> None:
         st.write("Enter a movie title to begin exploring recommendations.")
         return
 
+    if data_source == "TMDb live":
+        try:
+            live_recommender = load_live_recommender()
+        except RuntimeError as exc:
+            st.error(str(exc))
+            return
+
+        try:
+            recs = live_recommender.get_recommendations(movie_query, top_n=top_n * 2)
+        except ValueError as exc:
+            st.warning(str(exc))
+            suggestions = live_recommender.suggest_titles(movie_query, limit=5)
+            if suggestions:
+                st.markdown("#### TMDb suggestions")
+                for idx, suggestion in enumerate(suggestions, start=1):
+                    label = suggestion.get("title", "Unknown")
+                    year = suggestion.get("year")
+                    if year:
+                        label = f"{label} ({year})"
+                    if st.button(f"Use {label}", key=f"tmdb-{idx}"):
+                        st.session_state.movie_query = label
+                        rerun_app()
+            return
+
+        recs = apply_filters(recs, genre_filter, min_year, min_avg_rating)
+        if recs.empty:
+            st.warning("No live recommendations matched your filters yet.")
+            return
+
+        recs = recs.head(top_n)
+        render_recommendations(recs, "TMDb live recommendations")
+        return
+
+    # MovieLens hybrid path -------------------------------------------------
     hybrid_model = load_hybrid_model(min_support=10)
     content_model = load_content_model()
     client = load_omdb_client()
@@ -330,6 +417,7 @@ def main() -> None:
 
         if not catalog_suggestions and not external_suggestions:
             st.info("No close matches found yet; showing popular fallback recommendations instead.")
+
     try:
         recs = get_hybrid_recommendations(hybrid_model, movie_query, top_n=top_n * 3)
     except ValueError as exc:
